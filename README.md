@@ -1,103 +1,167 @@
-# AI Corrosion Detection – Model Upload to Azure Blob
+# AI Corrosion Detection Pipeline
 
-This project provides a Python script to **rename a trained model file** (`model_final.pth`) based on metadata from a JSON file stored in Azure Blob Storage, and then upload the renamed model to another container for storage.
-
----
-
-## 🚀 Workflow
-
-1. **Fetch Metadata JSON**
-   - Reads `utils/path.json` from the `retraining-data` container.
-   - Extracts the `filename` field.
-
-2. **Rename Model**
-   - Renames the local trained model file  
-     `~/StteelCorrAI/src/python/projects/ai_corrosion_detection/ml_outputs/static/detectron/model_final.pth`  
-     to the new filename specified in `path.json`.
-
-3. **Upload Model**
-   - Uploads the renamed model into the `ai-weight` Azure Blob container.
+This project automates training and retraining for corrosion detection using Azure resources.  
+It includes scripts for starting/stopping VMs, running pipelines, and managing model weights in Azure Blob Storage.
 
 ---
 
-## 📂 File Structure
+## 📂 Project Structure
 
 ```
-StteelCorrAI/
-└── src/python/projects/ai_corrosion_detection/
-    ├── ml_outputs/static/detectron/model_final.pth
-    ├── utils/path.json   (stored in Azure Blob `retraining-data`)
-    └── upload_blob.py    (this script)
+├── run_ai_corrosion.sh       # Script to start the pipeline
+├── stop_ai_corrosion.sh      # Script to stop the pipeline
+├── upload_blob.py            # Upload trained model weights to Azure Blob
+├── start_vm.py               # Start VM via Azure API
+├── stop_vm.py                # Stop VM via Azure API
+├── utils/
+│   └── path.json             # JSON file with metadata (e.g., new filename for model)
+└── README.md
 ```
 
 ---
 
-## ⚙️ Requirements
+## 🚀 Requirements
 
-- Python 3.9+
-- Install dependencies:
+- Python 3.11+
+- Miniconda or Conda environment
+- Azure CLI (`az`) installed and logged in
+- Azure credentials for API-based VM start/stop
+- Azure Storage account connection string
+
+Install dependencies:
 
 ```bash
-pip install azure-storage-blob
+pip install requests azure-storage-blob
 ```
-
-- Access to Azure Blob Storage with a valid **connection string**.
 
 ---
 
-## 🔧 Configuration
+## ▶️ Running the Pipeline
 
-Update the following in `upload_blob.py`:
+To run the corrosion detection pipeline:
 
+```bash
+bash run_ai_corrosion.sh
+```
+
+This will:
+1. Activate Conda environment  
+2. Pull latest code  
+3. Clean datasets  
+4. Run `dvc repro` pipeline  
+5. Train the model  
+
+Logs are stored via `systemd` (`journalctl -u ai_corrosion.service -f`).
+
+---
+
+## ⏹ Stopping the Pipeline
+
+```bash
+bash stop_ai_corrosion.sh
+```
+
+This will gracefully stop the running process managed by systemd.
+
+---
+
+## ☁️ Start/Stop VM via API
+
+We use **Python scripts with Azure REST API** to control VM lifecycle.
+
+### 🔹 Start VM
+
+```bash
+python start_vm.py
+```
+
+**start_vm.py**
 ```python
-AZURE_CONNECTION_STRING = "your-azure-connection-string"
-SRC_CONTAINER = "retraining-data"
-DEST_CONTAINER = "ai-weight"
+import requests
+import os
+
+TENANT_ID = os.getenv("AZURE_TENANT_ID")
+CLIENT_ID = os.getenv("AZURE_CLIENT_ID")
+CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET")
+SUBSCRIPTION_ID = os.getenv("AZURE_SUBSCRIPTION_ID")
+RESOURCE_GROUP = "myResourceGroup"
+VM_NAME = "ai1"
+
+# 1. Get Access Token
+token_url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/token"
+payload = {
+    "grant_type": "client_credentials",
+    "client_id": CLIENT_ID,
+    "client_secret": CLIENT_SECRET,
+    "resource": "https://management.azure.com/"
+}
+token = requests.post(token_url, data=payload).json()["access_token"]
+
+# 2. Start VM
+url = f"https://management.azure.com/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/{RESOURCE_GROUP}/providers/Microsoft.Compute/virtualMachines/{VM_NAME}/start?api-version=2022-11-01"
+headers = {"Authorization": f"Bearer {token}"}
+res = requests.post(url, headers=headers)
+print("Start VM Response:", res.status_code, res.text)
+```
+
+### 🔹 Stop VM
+
+```bash
+python stop_vm.py
+```
+
+**stop_vm.py**
+```python
+import requests
+import os
+
+TENANT_ID = os.getenv("AZURE_TENANT_ID")
+CLIENT_ID = os.getenv("AZURE_CLIENT_ID")
+CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET")
+SUBSCRIPTION_ID = os.getenv("AZURE_SUBSCRIPTION_ID")
+RESOURCE_GROUP = "myResourceGroup"
+VM_NAME = "ai1"
+
+# 1. Get Access Token
+token_url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/token"
+payload = {
+    "grant_type": "client_credentials",
+    "client_id": CLIENT_ID,
+    "client_secret": CLIENT_SECRET,
+    "resource": "https://management.azure.com/"
+}
+token = requests.post(token_url, data=payload).json()["access_token"]
+
+# 2. Stop VM
+url = f"https://management.azure.com/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/{RESOURCE_GROUP}/providers/Microsoft.Compute/virtualMachines/{VM_NAME}/powerOff?api-version=2022-11-01"
+headers = {"Authorization": f"Bearer {token}"}
+res = requests.post(url, headers=headers)
+print("Stop VM Response:", res.status_code, res.text)
 ```
 
 ---
 
-## ▶️ Usage
+## 📦 Upload Model to Azure Blob
 
-1. Train or generate your model.
-2. Ensure `model_final.pth` exists at:
-
-```
-~/StteelCorrAI/src/python/projects/ai_corrosion_detection/ml_outputs/static/detectron/model_final.pth
-```
-
-3. Run the script:
+After training, the model (`model_final.pth`) is renamed using `utils/path.json`  
+and uploaded to the `ai-weight` container.
 
 ```bash
 python upload_blob.py
 ```
 
-4. Output:
-   - Model is renamed to `data['filename']` (from JSON).
-   - Renamed model is uploaded to the `ai-weight` container in Azure Blob.
-
 ---
 
-## 📌 Example
+## 🔄 Automation
 
-If `path.json` contains:
+You can configure **systemd service** to automatically run `run_ai_corrosion.sh` when VM starts.  
+Logs can be monitored via:
 
-```json
-{
-  "filename": "corrosion_model_v1.pth"
-}
+```bash
+journalctl -u ai_corrosion.service -f
 ```
 
-Then:
-- Local file `model_final.pth` → renamed to `corrosion_model_v1.pth`
-- Uploaded to container `ai-weight/corrosion_model_v1.pth`
-
 ---
 
-## ✅ Notes
-
-- The script uses `shutil.move`, so the old file (`model_final.pth`) will be replaced with the renamed one locally.
-- Set `overwrite=True` in upload to always replace old versions in Blob.
-- You can extend the script to **delete local file after upload** if needed.
-
----
+## 📜 License
+MIT
